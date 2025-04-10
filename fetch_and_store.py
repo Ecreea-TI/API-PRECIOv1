@@ -33,6 +33,7 @@ def fetch_excel_data() -> pd.DataFrame:
         response.raise_for_status()
 
         df = pd.read_excel(BytesIO(response.content))
+        logger.info(f"Todas las columnas disponibles en el DataFrame: {list(df.columns)}")
 
         # Handle potential missing columns
         if 'FCHA_REGISTRO' not in df.columns:
@@ -77,31 +78,75 @@ def store_data(df: pd.DataFrame):
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS fuel_prices (
             FCHA_REGISTRO DATETIME,
+            RUC VARCHAR(255),
+            RAZON_SOCIAL VARCHAR(255),
             DEPARTAMENTO VARCHAR(255),
             PROVINCIA VARCHAR(255),
             DISTRITO VARCHAR(255),
-            PRODUCTO VARCHAR(255),
-            PRECIO DECIMAL(10,2),
-            ESTABLECIMIENTO VARCHAR(255),
             DIRECCION VARCHAR(255),
-            UBIGEO VARCHAR(255),
-            LATITUD DECIMAL(10,6),
-            LONGITUD DECIMAL(10,6)
+            PRODUCTO VARCHAR(255),
+            UNIDAD VARCHAR(255),
+            PRECIO DECIMAL(10,2)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         """)
         
-        # Seleccionar solo las columnas que existen en la tabla
-        required_columns = ['FCHA_REGISTRO', 'DEPARTAMENTO', 'PROVINCIA', 'DISTRITO', 
-                           'PRODUCTO', 'PRECIO', 'ESTABLECIMIENTO', 'DIRECCION', 
-                           'UBIGEO', 'LATITUD', 'LONGITUD']
+        # Define required columns
+        required_columns = ['FCHA_REGISTRO', 'RUC', 'RAZON_SOCIAL', 'DEPARTAMENTO', 'PROVINCIA', 'DISTRITO', 
+                           'DIRECCION', 'PRODUCTO', 'UNIDAD', 'PRECIO']
+                           
+        # Check and add any missing columns
+        cursor.execute("DESCRIBE fuel_prices")
+        existing_columns = [col[0] for col in cursor.fetchall()]
         
-        # Filtrar columnas del DataFrame
-        df = df[[col for col in required_columns if col in df.columns]]
+        for col in required_columns:
+            if col not in existing_columns:
+                if col == 'FCHA_REGISTRO':
+                    cursor.execute(f"ALTER TABLE fuel_prices ADD COLUMN {col} DATETIME")
+                elif col in ['LATITUD', 'LONGITUD', 'PRECIO']:
+                    cursor.execute(f"ALTER TABLE fuel_prices ADD COLUMN {col} DECIMAL(10,6)")
+                else:
+                    cursor.execute(f"ALTER TABLE fuel_prices ADD COLUMN {col} VARCHAR(255)")
+                logger.info(f"Added missing column: {col}")
+        
+        # Seleccionar solo las columnas que existen en la tabla
+        required_columns = ['FCHA_REGISTRO', 'RUC', 'RAZON_SOCIAL', 'DEPARTAMENTO', 'PROVINCIA', 'DISTRITO', 
+                           'DIRECCION', 'PRODUCTO', 'UNIDAD', 'PRECIO']
+        
+        # Verificar nombres alternativos de columnas
+        # Mapear columnas específicas del Excel
+        precio_col = 'PRECIO_VENTA'
+        razon_social_col = 'RAZON'
+        
+        if precio_col not in df.columns or razon_social_col not in df.columns:
+            logger.error(f"No se encontraron columnas requeridas. Columnas disponibles: {list(df.columns)}")
+            raise ValueError("No se encontraron columnas requeridas en el DataFrame")
+            
+        # Renombrar columnas para coincidir con la estructura de la base de datos
+        df = df.rename(columns={
+            precio_col: 'PRECIO',
+            razon_social_col: 'RAZON_SOCIAL'
+        })
+
+        # Remove unwanted columns
+        unwanted_columns = ['ESTABLECIMIENTO', 'UBIGEO', 'LATITUD', 'LONGITUD']
+        df = df.drop(columns=[col for col in unwanted_columns if col in df.columns])
+        logger.info(f"Columnas del DataFrame: {df.columns}")
+
+        # Asegurar que todas las columnas requeridas estén presentes
+        for col in required_columns:
+            if col not in df.columns:
+                df[col] = None  # Añadir columna con valores nulos si no existe
+                logger.warning(f"Columna requerida {col} no encontrada - añadida con valores nulos")
+        
+        # Filtrar solo las columnas requeridas para la inserción
+        required_columns = ['FCHA_REGISTRO', 'RUC', 'RAZON_SOCIAL', 'DEPARTAMENTO', 'PROVINCIA', 'DISTRITO', 
+                           'DIRECCION', 'PRODUCTO', 'UNIDAD', 'PRECIO']
+        df_filtered = df[[col for col in required_columns if col in df.columns]]
         
         # Convertir DataFrame a lista de tuplas para insertar
-        data = [tuple(x) for x in df.values]
-        columns = ", ".join(df.columns)
-        placeholders = ", ".join(["%s"] * len(df.columns))
+        data = [tuple(x) for x in df_filtered.values]
+        columns = ", ".join(df_filtered.columns)
+        placeholders = ", ".join(["%s"] * len(df_filtered.columns))
         
         query = f"INSERT INTO fuel_prices ({columns}) VALUES ({placeholders})"
         cursor.executemany(query, data)
