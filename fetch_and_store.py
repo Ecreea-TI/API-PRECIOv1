@@ -5,6 +5,7 @@ from datetime import datetime
 import logging
 import os
 from sqlalchemy import create_engine
+import mysql.connector
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -61,10 +62,54 @@ def store_data(df: pd.DataFrame):
         Exception: If any error occurs during database operations
     """
     try:
-        engine = create_engine(DATABASE_URL)
-        with engine.connect() as connection:
-            df.to_sql('fuel_prices', connection, if_exists='append', index=False)
+        # Alternativa usando mysql-connector
+        connection = mysql.connector.connect(
+            host="bh7114.banahosting.com",
+            port=3306,
+            user="fcqngeyc_adminApp",
+            password="emkappprecios12",
+            database="fcqngeyc_dataPricingApp",
+            charset="utf8mb4"
+        )
+        cursor = connection.cursor()
+        
+        # Verificar si la tabla existe, si no crearla
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS fuel_prices (
+            FCHA_REGISTRO DATETIME,
+            DEPARTAMENTO VARCHAR(255),
+            PROVINCIA VARCHAR(255),
+            DISTRITO VARCHAR(255),
+            PRODUCTO VARCHAR(255),
+            PRECIO DECIMAL(10,2),
+            ESTABLECIMIENTO VARCHAR(255),
+            DIRECCION VARCHAR(255),
+            UBIGEO VARCHAR(255),
+            LATITUD DECIMAL(10,6),
+            LONGITUD DECIMAL(10,6)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        """)
+        
+        # Seleccionar solo las columnas que existen en la tabla
+        required_columns = ['FCHA_REGISTRO', 'DEPARTAMENTO', 'PROVINCIA', 'DISTRITO', 
+                           'PRODUCTO', 'PRECIO', 'ESTABLECIMIENTO', 'DIRECCION', 
+                           'UBIGEO', 'LATITUD', 'LONGITUD']
+        
+        # Filtrar columnas del DataFrame
+        df = df[[col for col in required_columns if col in df.columns]]
+        
+        # Convertir DataFrame a lista de tuplas para insertar
+        data = [tuple(x) for x in df.values]
+        columns = ", ".join(df.columns)
+        placeholders = ", ".join(["%s"] * len(df.columns))
+        
+        query = f"INSERT INTO fuel_prices ({columns}) VALUES ({placeholders})"
+        cursor.executemany(query, data)
+        connection.commit()
+        
         logger.info(f"Successfully stored {len(df)} records in database")
+        cursor.close()
+        connection.close()
     except Exception as e:
         logger.error(f"Error storing data: {str(e)}")
         raise
